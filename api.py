@@ -6,7 +6,6 @@ from time import time
 
 from predictor import PosPrediction
 
-
 class PRN:
     ''' Joint 3D Face Reconstruction and Dense Alignment with Position Map Regression Network
     Args:
@@ -114,7 +113,7 @@ class PRN:
             size = int(old_size*1.6)
             print(center, size)
             print([center[0]-size/2, center[1]-size/2], [center[0] -
-                                                                   size/2, center[1]+size/2], [center[0]+size/2, center[1]-size/2])
+                                                         size/2, center[1]+size/2], [center[0]+size/2, center[1]-size/2])
         else:
             detected_faces = self.dlib_detect(image)
             if len(detected_faces) == 0:
@@ -153,8 +152,8 @@ class PRN:
         cropped_pos = self.net_forward(cropped_image)
         print('cropped_pos')
         print(np.shape(cropped_pos))
-        print(np.min(cropped_pos, axis=(0,1)), np.max(
-            cropped_pos, axis=(0,1)), np.mean(cropped_pos, axis=(0,1)))
+        print(np.min(cropped_pos, axis=(0, 1)), np.max(
+            cropped_pos, axis=(0, 1)), np.mean(cropped_pos, axis=(0, 1)))
         # print 'net time:', time() - st
 
         # restore
