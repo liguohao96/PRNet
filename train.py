@@ -5,11 +5,12 @@ import skimage.io
 import numpy as np
 
 
-def train(loss_val, var_list):
-    global_step = tf.Variable(FLAGS['start_step'], trainable=False)
-    learning_rate = tf.train.exponential_decay(FLAGS['learning_rate'],
+def train(loss_val, var_list, train_config):
+    lr, decay_step, decay_rate, start_step = train_config.learning_rate, train_config.decay_step, train_config.decay_rate, train_config.start_step
+    global_step = tf.Variable(start_step, trainable=False)
+    learning_rate = tf.train.exponential_decay(lr,
                                                global_step=global_step,
-                                               decay_steps=FLAGS['decay_step'], decay_rate=FLAGS['decay_rate'],
+                                               decay_steps=decay_step, decay_rate=decay_rate,
                                                staircase=True)
     optimizer = tf.train.AdamOptimizer(learning_rate)
     grads = optimizer.compute_gradients(loss_val, var_list=var_list)
@@ -25,15 +26,15 @@ def _parse_function(input_file, label_file):
     return image_decoded, label_decoded
 
 
-FLAGS = {'learning_rate': 1e-4,
-         'log_dir': 'Data/net-data/',
-         'weight_file': './Data/net-data/256_256_resfcn256_weight',
-         'decay_step': 2500,
-         'decay_rate': 0.25,
-         'start_step': 0,
-         'end_step': 15000,
-         'batch_size': 8
-         }
+# FLAGS = {'learning_rate': 1e-4,
+#          'log_dir': 'Data/net-data/',
+#          'weight_file': './Data/net-data/256_256_resfcn256_weight',
+#          'decay_step': 2500,
+#          'decay_rate': 0.25,
+#          'start_step': 0,
+#          'end_step': 15000,
+#          'batch_size': 8
+#          }
 
 import random
 
@@ -140,7 +141,7 @@ class IterableBatchData(object):
         return self._length
 
 
-def main():
+def main(config):
     resolution_inp = 256
     resolution_op = 256
     MaxPos = resolution_inp*1.1
@@ -164,10 +165,11 @@ def main():
     loss = tf.square(y_ - x_op)
     loss = tf.multiply(loss, constant_mask)
     loss = tf.reduce_mean(loss)
-    loss_summary = tf.summary.scalar("entropy", loss)
+    loss_summary = tf.summary.scalar("MSE", loss)
     trainable_var = tf.trainable_variables()
-    train_op, lr_op, global_step_op = train(loss, trainable_var)
-    dataset = BatchData('../results/', batch_size=FLAGS['batch_size'])
+    train_op, lr_op, global_step_op = train(loss, trainable_var, config.train)
+    dataset = BatchData(config.data.dataset,
+                        batch_size=config.train.batch_size)
     print('train length is {}, valid length is {}'.format(
         len(dataset.train), len(dataset.valid)))
     iterator = dataset.train
@@ -178,15 +180,15 @@ def main():
     sess = tf.Session(config=tf_config)
     init = tf.global_variables_initializer()
     sess.run(init)
-    if 'weight_file' in FLAGS and FLAGS['weight_file'] and os.path.exists(FLAGS['weight_file']+'.data-00000-of-00001'):
+    if 'weight' in config.data and config.data.weight and os.path.exists(config.data.weight+'.data-00000-of-00001'):
         tf.train.Saver(network.vars).restore(
-            sess, FLAGS['weight_file'])
+            sess, config.data.weight)
 
     saver = tf.train.Saver(max_to_keep=20)
     train_writer = tf.summary.FileWriter('./Data/logs/', sess.graph)
     valid_writer = tf.summary.FileWriter('./Data/logs/')
-    start = FLAGS['start_step']
-    end = FLAGS['end_step']
+    start = config.train.start_step
+    end = config.train.end_step
     loss_sum = valid_loss = 0.0
     itr = start
     while True:
@@ -218,13 +220,89 @@ def main():
                 loss_sum = 0.0
 
             if itr % 500 == 0:
-                saver.save(sess, FLAGS['log_dir'] + "model.ckpt", itr)
+                saver.save(sess, config.data.log + "model.ckpt", itr)
         else:
             continue
         break
 
-    saver.save(sess, FLAGS['log_dir'] + "model.ckpt", itr)
+    saver.save(sess, config.data.log + "model.ckpt", itr)
 
 
 if __name__ == "__main__":
-    main()
+
+    import re
+    from collections import defaultdict
+    from utils.configuration import Configuration
+
+    def config_from_file(file_path):
+        # read file and store into dict
+        f = open(file_path, 'r')
+        obj = defaultdict(dict)
+        section_name, section_re = '', re.compile('\[(?P<section>[_a-z]+)\]')
+        attr_name, attr_re = '', re.compile(
+            '(?P<attr>[_a-zA-Z]+)\s*=\s*(?P<value>[\W\w]+)$')
+        string_re = re.compile(
+            '"(?P<string>[\W\w]+)"$')
+        for line in f.readlines():
+            line = line[:-1]
+            ret = section_re.search(line)
+            if ret:
+                section_name = ret.group('section')
+                continue
+
+            ret = attr_re.search(line)
+            if ret:
+                attr = ret.group('attr')
+                val = ret.group('value')
+                str_ret = string_re.search(val)
+                if str_ret:
+                    val = str_ret.group('string')
+                if section_name:
+                    obj[section_name][attr] = val
+                else:
+                    obj[attr] = val
+
+        # do some name changing
+        obj = interprete_object(obj)
+
+        # get config object
+        config = Configuration.from_dict(obj)
+        return config
+
+    def interprete_object(dict_obj):
+        obj, delete_key_list = {}, []
+        for k in dict_obj:
+            if isinstance(dict_obj[k], dict):
+                obj[k] = interprete_object(dict_obj[k])
+            else:
+                if k == 'lr':
+                    delete_key_list.append(k)
+                    lr, decay = dict_obj[k].split('/')
+                    obj['learning_rate'] = float(lr)
+                    obj['decay_rate'] = float(decay)
+                elif k == 'step':
+                    delete_key_list.append(k)
+                    step, decay_step = dict_obj[k].split('/')
+                    start, end = step.split('-')
+                    obj['start_step'] = int(start)
+                    obj['end_step'] = int(end)
+                    obj['decay_step'] = int(decay_step)
+                elif k == 'batch_size':
+                    obj[k] = int(dict_obj[k])
+                else:
+                    obj[k] = dict_obj[k]
+        for key in delete_key_list:
+            del dict_obj[key]
+        return obj
+
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument('file', help='path to config file')
+    args = parser.parse_args()
+    config_file = args.file
+
+    config = config_from_file(config_file)
+    print('-------configurations---------')
+    print(config)
+    print('------------done--------------')
+    main(config)
